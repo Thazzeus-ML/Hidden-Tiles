@@ -34,4 +34,4 @@ If this policy ever changes, the updated version will be posted at this address 
 
 ## Contact
 
-Questions about this policy: **[your email address]**
+Questions about this policy: **thazzeus.rp@gmail.com**
