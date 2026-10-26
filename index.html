@@ -324,7 +324,7 @@
     <button class="btn snd" id="tSound" aria-pressed="true" title="Sound"><svg class="ic-snd-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18.3 6.3a8 8 0 0 1 0 11.4"/></svg><svg class="ic-snd-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg></button>
     <button class="btn" id="tTheme" title="Switch theme"><svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg><svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg></button>
   </div>
-  <p class="title-note">New daily puzzles every midnight.</p>
+  <p class="title-note">New daily puzzles every midnight.<span id="privacyLink" hidden> · <a href="PRIVACY">Privacy</a></span></p>
 </section>
 
 <div id="game">
@@ -457,7 +457,7 @@ const maxMisses = () => MODES[MODE].misses;
 
 // ---- saving: each difficulty keeps a daily slot and a random slot, plus which one was open last
 const slotKey = (mode, kind) => SAVE + '.' + mode + '.' + kind;
-function save() { if (!G) return; store.set(slotKey(G.level, G.kind), G); store.set(SAVE + '.' + G.level + '.cur', G.kind); store.set(SAVE + '.mode', G.level); }
+function save() { if (!G) return; trackProgress(); store.set(slotKey(G.level, G.kind), G); store.set(SAVE + '.' + G.level + '.cur', G.kind); store.set(SAVE + '.mode', G.level); }
 function loadSlot(mode, kind) {
   const s = store.get(slotKey(mode, kind));
   if (!s || !s.rows || !PUZZLES[mode][s.idx] || PUZZLES[mode][s.idx] !== s.rows.join('|')) return null;
@@ -827,6 +827,41 @@ function render() {
   });
 }
 
+// ---- stats, web version only: anonymous counts sent to GoatCounter (no cookies, nothing personal, no ids).
+//      Off inside the Android app, when the page is opened from a file, and while STATS_CODE is empty.
+const STATS_CODE = 'thazzeus';
+const statsOn = /^[a-z0-9-]+$/.test(STATS_CODE) && /^https?:$/.test(location.protocol) && !window.HiddenApp;
+const statQueue = []; let statWait = false;
+if (statsOn) {
+  const sc = document.createElement('script'); sc.async = true; sc.src = 'https://gc.zgo.at/count.js';
+  sc.dataset.goatcounter = 'https://' + STATS_CODE + '.goatcounter.com/count';   // count.js also records the visit itself
+  document.head.appendChild(sc);
+  document.getElementById('privacyLink').hidden = false;
+}
+function stat(path, title) {
+  if (!statsOn) return;
+  statQueue.push({ path, title, event: true });
+  if (statWait) return; statWait = true;
+  (function flush(tries) {                                     // count.js loads async; hold events until it's ready
+    const gc = window.goatcounter;
+    if (gc && typeof gc.count === 'function') { statWait = false; while (statQueue.length) try { gc.count(statQueue.shift()); } catch (e) {} }
+    else if (tries < 60) setTimeout(() => flush(tries + 1), 500); else { statWait = false; statQueue.length = 0; }
+  })(0);
+}
+// called on every save: reports a puzzle's first move and its result once each (remembered in the save, so reloads don't recount)
+function trackProgress() {
+  if (!statsOn) return;
+  const sent = G.sent || (G.sent = {}), mode = G.level, label = MODES[mode].label;
+  if (!sent.play && (totalGuesses() > 0 || G.hinted.length)) { sent.play = 1; stat(`play-${mode}-${G.kind}`, `Started: ${label} ${G.kind}`); }
+  if (!sent.end && G.status !== 'playing') {
+    sent.end = 1;
+    const end = G.status === 'won' ? 'won' : G.revealed ? 'gave-up' : 'out-of-misses';
+    stat(`${end}-${mode}`, `${G.status === 'won' ? 'Won' : G.revealed ? 'Gave up' : 'Ran out of misses'}: ${label}`);
+    if (G.status === 'won') stat(`misses-${mode}-${G.guesses}`, `Won ${label} with ${G.guesses} ${G.guesses === 1 ? 'miss' : 'misses'}`);
+    stat(`hints-${mode}-${G.hinted.length}`, `Finished ${label} using ${G.hinted.length} ${G.hinted.length === 1 ? 'hint' : 'hints'}`);
+  }
+}
+
 // ---- native bridge: present only inside the Android app (window.HiddenApp); a no-op in a browser
 function native(method, arg) {
   try { const app = window.HiddenApp; if (app && typeof app[method] === 'function') { app[method](arg); return true; } } catch (e) {}
@@ -929,6 +964,7 @@ function shareText() {
 // share: the Android share sheet inside the app, the system share sheet on phones' browsers, the clipboard elsewhere
 async function share() {
   const t = shareText();
+  stat('shared-result', 'Shared a result');
   if (native('share', t)) return;
   if (navigator.share) { try { await navigator.share({ text: t }); return; } catch (e) { if (e && e.name === 'AbortError') return; } }
   try { await navigator.clipboard.writeText(t); toast('Result copied'); } catch (e) { toast('Couldn’t copy your result'); }
